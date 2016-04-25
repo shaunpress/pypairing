@@ -56,14 +56,16 @@ def make_printer_text(text_string):
             tab_num = (len(field_list[j])+FIELD_SIZE-1)/FIELD_SIZE
             if tab_num > field_width[j]:
                 field_width[j] = tab_num
-
+    total_width = 0
     for i in range(len(field_width)):
         field_width[i] = field_width[i]*FIELD_SIZE
+        total_width += field_width[i]
 
     output_string = ""
     for lines in line_list:
         if lines.startswith("==="):
-            output_string += lines
+            output_string += "="*total_width
+            output_string += "\n"
         else:
             field_list = lines.split('\t')
             for i in range(len(field_list)):
@@ -101,6 +103,7 @@ class MainFrame(wx.Frame):
         self.app_page = None
         self.frame_sizer = wx.BoxSizer(wx.VERTICAL)
         self.SetSizer(self.frame_sizer)
+        self.Bind(wx.EVT_CLOSE,self.OnClose)
         self.make_menu()
         self.init_mvc()
 
@@ -214,8 +217,9 @@ class MainFrame(wx.Frame):
                         self.details_dialog.end_date.GetValue().FormatISODate(),
                         self.details_dialog.rounds_num.GetValue(),
                         self.details_dialog.director_txt.GetValue())
-            self.tournament_details.set_details(dlg_data)
             self.init_mvc()
+            self.tournament_details.set_details(dlg_data)
+            self.SetTitle("PyPairing 1.0 - "+dlg_data[0])
             
         self.details_dialog.Hide()
         
@@ -228,6 +232,7 @@ class MainFrame(wx.Frame):
                         self.details_dialog.rounds_num.GetValue(),
                         self.details_dialog.director_txt.GetValue())
             self.tournament_details.set_details(dlg_data)
+            self.SetTitle("PyPairing 1.0 - "+dlg_data[0])
             
         self.details_dialog.Hide()
 
@@ -256,6 +261,11 @@ class MainFrame(wx.Frame):
         f.write(self.player_details.file_pairing_output())
         f.close()
 
+    def write_csv(self,fname):
+        f = open(fname,'w')
+        f.write(self.player_details.player_csv())
+        f.close()
+        
     def read_file(self,fname):
         # Reads the file in APS (Abstract Pairing System) Format
         f = open(fname,'r')
@@ -263,6 +273,7 @@ class MainFrame(wx.Frame):
         f.close()
         date_line = lines[2].split(',')
         tournament_info = (lines[0],lines[1],date_line[0],date_line[1],lines[4],lines[3])
+        self.SetTitle("PyPairing 1.0 - "+tournament_info[0])
         self.tournament_details.set_details(tournament_info)
         self.details_dialog.set_values(tournament_info)
         self.player_details.reset_players()
@@ -320,7 +331,12 @@ class MainFrame(wx.Frame):
         self.app_page.round_panel.delete_round()
     
     def export_csv(self):
-        print self.player_details.player_csv()
+        dlg = wx.FileDialog(self,"Export CSV File",style=wx.FD_SAVE,wildcard="*.csv")
+        if dlg.ShowModal() == wx.ID_OK:
+            fname = dlg.GetPath()
+            self.write_csv(fname)
+            if self.view != None:
+                self.view.Destroy()
     
     def showHelp(self):
         helpDlg = HelpFrameClass(None)
@@ -343,8 +359,20 @@ class MainFrame(wx.Frame):
         print desc
         wx.AboutBox(info)
         
+    def OnClose(self,event):
+        if wx.MessageBox("Do you mean to exit?",
+                         "Please confirm",
+                         wx.ICON_QUESTION | wx.YES_NO) != wx.YES:
+            event.Veto()
+            return
 
+        self.Destroy()
+        
     def exit_app(self):
+        if wx.MessageBox("Do you mean to exit?",
+                         "Please confirm",
+                         wx.ICON_QUESTION | wx.YES_NO) != wx.YES:
+            return False
         return True
 
 
@@ -376,10 +404,10 @@ class MyTabFrame(wx.Notebook):
         self.output_panel.show_standings(None)
         
     def show_crosstable(self):
-        self.output_panel.show_crosstable()
+        self.output_panel.show_crosstable(None)
         
     def show_pairings(self):
-        self.output_panel.show_pairings()
+        self.output_panel.show_pairings(None)
 
 class PlayerListPage(wx.Panel):
     def __init__(self,parent,data_source):
@@ -579,11 +607,14 @@ class PairingPage(wx.Panel):
         bottom_bar.Add(button_sizer,0,wx.EXPAND)
 
         #Add a spinner for rounds
-
+        spinner_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.round_label = wx.StaticText(self,-1,"Active Round")
         self.round_spinner = wx.SpinCtrl(self,-1,"",size=(80,30),min=0,max=0,initial=0)
         self.Bind(wx.EVT_SPINCTRL,self.round_changed,self.round_spinner)
+        spinner_sizer.Add(self.round_label,0,wx.ALL,5)
+        spinner_sizer.Add(self.round_spinner,0,wx.ALL,5)
 
-        bottom_bar.Add(self.round_spinner,0,wx.RIGHT)
+        bottom_bar.Add(spinner_sizer,0,wx.EXPAND)
 
         box.Add(bottom_bar,0,wx.ALL,5)
 
@@ -679,7 +710,11 @@ class PairingPage(wx.Panel):
         for i in range(len(self.player_details_list.players)):
             player_id = self.player_details_list.players[i].pairing_id
             player_score = self.player_details_list.players[i].get_player_score()
-            pairing_data.append([player_id,self.player_details_list.players[i],player_score[0],player_score[1]])
+            if player_score[2] == 0:
+                vp_percent = 0.0
+            else:
+                vp_percent = float(player_score[1])/float(player_score[2])
+            pairing_data.append([player_id,self.player_details_list.players[i],player_score[0],player_score[1],vp_percent])
 
             
         simple_pairings = SimplePairingClass(self.pairing_list_table.current_round,pairing_data)
@@ -839,11 +874,14 @@ class OutputPage(wx.Panel):
 
     def show_standings(self,event):
         ''' Output standings as a string '''
-        output_text = "Place \tPlayer Name \tRating \tMP \tVP \tVP% \n"
-        output_text += "===================================================\n"
+        header_text = "Standings for Round: "+str(self.pairing_list_data.current_round)+"\n"
+        output_text = "Place \tPlayer Name \tRating \tMP \tVP \tVP% \tWins \n"
+        output_text += "======================================================\n"
 
         output_text += self.player_list_data.player_standing_list(self.pairing_list_data.current_round)
-        self.output_window.SetValue(output_text)
+        print_output = make_printer_text(output_text)
+        display_text = header_text+print_output
+        self.output_window.SetValue(display_text)
 
     def show_crosstable(self,event):
         ''' Output crosstable as a string '''
@@ -851,7 +889,7 @@ class OutputPage(wx.Panel):
         output_text = "Place \tPlayer Name \tRating \t"
         for i in range(self.pairing_list_data.current_round):
             output_text += str(i+1)+"\t"
-        output_text += "MP \tVP \tVP% \n"
+        output_text += "MP \tVP \tVP% \tWins \n"
         output_text += "===================================================\n"
 
         output_text += self.player_list_data.player_crosstable_list(self.pairing_list_data.current_round)
@@ -1270,18 +1308,19 @@ class PlayerListClass:
         standing_list = []
         for player in self.players:
             player_score = player.get_player_score_n(round_num)
+            player_wins = player.get_player_wins_n(round_num)
             if player_score[2] != 0:
                 player_percent = float(player_score[1])/float(player_score[2])
             else:
                 player_percent = 0.0
-            standing_list.append([player.name,player.rating,player_score[0],player_score[1],player_percent])
+            standing_list.append([player.name,player.rating,player_score[0],player_score[1],player_percent,player_wins])
 
         standing_list.sort(key = lambda x: (x[2],x[3],x[4]),reverse=True)
 
         for i in range(len(standing_list)):
             output_text += str(i+1)+"\t"+standing_list[i][0]+"\t"+str(standing_list[i][1])+"\t"
             output_text += str(standing_list[i][2])+"\t"+str(standing_list[i][3])+"\t"
-            output_text += '{:.2%}'.format(standing_list[i][4])+"\n"
+            output_text += '{:.2%}'.format(standing_list[i][4])+"\t"+str(standing_list[i][5])+"\n"
 
         return output_text
 
@@ -1291,11 +1330,12 @@ class PlayerListClass:
         standing_list = []
         for player in self.players:
             player_score = player.get_player_score_n(round_num)
+            player_wins = player.get_player_wins_n(round_num)
             if player_score[2] != 0:
                 player_percent = float(player_score[1])/float(player_score[2])
             else:
                 player_percent = 0.0
-            standing_list.append([player.pairing_id,player.name,player.rating,player_score[0],player_score[1],player_percent])
+            standing_list.append([player.pairing_id,player.name,player.rating,player_score[0],player_score[1],player_percent,player_wins])
 
         standing_list.sort(key = lambda x: (x[3],x[4],x[5]),reverse=True)
 
@@ -1305,12 +1345,16 @@ class PlayerListClass:
                 round_result = self.players[standing_list[i][0]].get_round_result(j)
                 output_text += str(round_result[0])+" "+str(round_result[1])+"-"+str(round_result[2])+" "+str(round_result[3])+"\t"
 
-            output_text += str(standing_list[i][3])+"\t"+str(standing_list[i][4])+"\t"+'{:.2%}'.format(standing_list[i][5])+"\n"
+            output_text += str(standing_list[i][3])+"\t"+str(standing_list[i][4])+"\t"+'{:.2%}'.format(standing_list[i][5])+"\t"
+            output_text += str(standing_list[i][6])+"\n"
         return output_text
         
                 
     def player_csv(self):
-        output_string = ""
+        output_string = "Pairing ID,Name,Rating"
+        for i in range(len(self.players[0].results)):
+            output_string += ",Round "+str(i+1)+" Table,Score,VP Score"
+        output_string += "\n"
         for player in self.players:
             output_string += player.output_csv()
             
@@ -1373,6 +1417,14 @@ class PlayerClass:
 
         return (score_total,vp_total,vp_total_total)
 
+    def get_player_wins_n(self,round_no):
+        ''' Returns the player wins calculated on a match score of > 3 '''
+        wins = 0
+        for i in range(round_no):
+            if self.results[i].score > 3:
+                wins +=1
+        return wins
+
     def get_round_result(self,round_no):
         return (self.results[round_no].table_no,self.results[round_no].score,
                 self.results[round_no].vp_score,self.results[round_no].vp_total)
@@ -1381,9 +1433,9 @@ class PlayerClass:
         return self.get_player_score_n(len(self.results))
     
     def output_csv(self):
-        output_string = str(self.pairing_id)+","+self.name+","+str(self.rating)+","
+        output_string = str(self.pairing_id)+","+self.name+","+str(self.rating)
         for result in self.results:
-            output_string += str(result.table_no)+","+str(result.score)+","+str(result.vp_score)+","
+            output_string += ","+str(result.table_no)+","+str(result.score)+","+str(result.vp_score)
             
         output_string += "\n"
         
@@ -1557,9 +1609,11 @@ class SimplePairingClass:
             return self.first_round_pairings()
         total_players = self.available_count()
         three_player_boards = 4-(total_players % 4) #Number of short boards
+        if three_player_boards == 4:
+            three_player_boards = 0
         four_player_boards = ((total_players+3) / 4) - three_player_boards
         pairings = []
-        self.pairing_data.sort(key=lambda x: (x[2],x[3]), reverse = True)
+        self.pairing_data.sort(key=lambda x: (x[2],x[4]), reverse = True)
         print self.pairing_data
         pair_count = 0
         board_count = 1
@@ -1588,6 +1642,8 @@ class SimplePairingClass:
         ''' Different pairings for first round '''
         total_players = self.available_count()
         three_player_boards = 4-(total_players % 4) #Number of short boards
+        if three_player_boards == 4:
+            three_player_boards = 0
         four_player_boards = ((total_players+3) / 4) - three_player_boards
         print "Boards: ",total_players,three_player_boards,four_player_boards
         pairings = []
@@ -1647,15 +1703,17 @@ class TextPrintout(wx.Printout):
         self.lineHeight = dc.GetCharHeight()
         self.linesPerPage = int(self.pageHeight/self.lineHeight)
 
-    def OnPrepearePrinting(self):
+    def OnPreparePrinting(self):
+        print "Never Called"
         dc = self.GetDC()
         self.CalculateScale(dc)
         self.CalculateLayout(dc)
         self.numPages = len(self.lines)/self.linesPerPage
-        if len(self.lines) % self.LinesPerPage != 0:
+        if len(self.lines) % self.linesPerPage != 0:
             self.numPages += 1
 
     def OnPrintPage(self,page):
+        print "Called",page
         dc = self.GetDC()
         self.CalculateScale(dc)
         self.CalculateLayout(dc)
